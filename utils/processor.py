@@ -8,7 +8,6 @@ from sklearn.cluster import KMeans
 from typing import Dict, Tuple, List
 
 from sports.common.team import TeamClassifier
-from sports.common.view import ViewTransformer
 from sports.configs.soccer import SoccerPitchConfiguration
 from roboflow import Roboflow
 
