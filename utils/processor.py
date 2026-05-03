@@ -14,11 +14,6 @@ from roboflow import Roboflow
 from .visualizer import PitchVisualizer
 
 
-# ============================================
-# JERSEY COLOR EXTRACTOR
-# (Matches Google Colab Cell 4)
-# ============================================
-
 class JerseyColorExtractor:
     """Extract actual jersey colors from detected players"""
     
@@ -28,7 +23,7 @@ class JerseyColorExtractor:
         self.stability = 0.85
         
     def extract_dominant_color(self, frame, bbox, n_colors=3):
-        """Extract dominant jersey color from upper body region - Matches Colab Cell 4"""
+        """Extract dominant jersey color from upper body region"""
         try:
             x1, y1, x2, y2 = map(int, bbox)
             h, w = frame.shape[:2]
@@ -65,9 +60,9 @@ class JerseyColorExtractor:
             dominant_idx = labels[np.argmax(counts)]
             dominant_color = kmeans.cluster_centers_[dominant_idx]
             
-            # Return BGR format as plain Python ints
-            r, g, b = map(int, dominant_color)
-            return (b, g, r)
+            # Return BGR as Python ints
+            r_val, g_val, b_val = map(int, dominant_color)
+            return (b_val, g_val, r_val)
             
         except Exception:
             return None
@@ -76,11 +71,11 @@ class JerseyColorExtractor:
         """Check if color is likely grass"""
         if color is None:
             return True
-        b, g, r = color
-        return g > r and g > b and g > threshold
+        b_val, g_val, r_val = color
+        return g_val > r_val and g_val > b_val and g_val > threshold
     
     def get_team_colors_from_frame(self, frame, detections, tracker_ids, team_ids):
-        """Extract team colors from current frame detections - Matches Colab Cell 4"""
+        """Extract team colors from current frame"""
         team_samples = defaultdict(list)
         
         for bbox, tracker_id, team_id in zip(detections.xyxy, tracker_ids, team_ids):
@@ -98,51 +93,36 @@ class JerseyColorExtractor:
             if len(colors) >= 3:
                 median_color = tuple(int(x) for x in np.median(colors, axis=0))
                 if team_id in self.team_colors:
-                    prev = np.array(self.team_colors[team_id])
-                    new = np.array(median_color)
-                    smoothed = (prev * self.stability + new * (1 - self.stability)).astype(int)
-                    self.team_colors[team_id] = tuple(int(x) for x in smoothed)
+                    prev = np.array(self.team_colors[team_id], dtype=np.float64)
+                    new = np.array(median_color, dtype=np.float64)
+                    smoothed = prev * self.stability + new * (1.0 - self.stability)
+                    self.team_colors[team_id] = (int(smoothed[0]), int(smoothed[1]), int(smoothed[2]))
                 else:
                     self.team_colors[team_id] = median_color
         
-        # Default colors if not enough samples
+        # Default colors
         if 0 not in self.team_colors:
             self.team_colors[0] = (255, 50, 50)
         if 1 not in self.team_colors:
             self.team_colors[1] = (50, 50, 255)
             
         return self.team_colors
-    
-    def get_player_color(self, tracker_id):
-        """Get the current color for a specific player - Matches Colab Cell 4"""
-        if tracker_id in self.player_history:
-            colors = self.player_history[tracker_id]
-            if colors:
-                return tuple(int(x) for x in np.median(colors, axis=0))
-        return None
 
-
-# ============================================
-# MAIN SPORTS ANALYTICS PROCESSOR
-# (Matches Google Colab Cell 6)
-# ============================================
 
 class SportsAnalyticsProcessor:
     """Main video processor with homography-based bird's eye view"""
     
     BALL_ID = 0
-    GOALKEEPER_ID = 1
     PLAYER_ID = 2
-    REFEREE_ID = 3
     
     def __init__(self, api_key: str):
         self.config = SoccerPitchConfiguration()
-        self.jersey_extractor = JerseyColorExtractor()
+        self.colors = JerseyColorExtractor()
         self.viz = PitchVisualizer()
         self.team_classifier = None
         self.tracker = None
         self.homography_buffer = deque(maxlen=5)
-        self.current_homography = None
+        self.current_H = None
         
         # Initialize Roboflow models
         self.rf = Roboflow(api_key=api_key)
@@ -159,10 +139,6 @@ class SportsAnalyticsProcessor:
         self.models_loaded = True
         print("Models loaded!")
     
-    # ============================================
-    # ROBLOFLOW API METHODS
-    # ============================================
-    
     def _predict(self, model, frame, confidence=25):
         """Run Roboflow prediction"""
         tmp = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
@@ -177,7 +153,7 @@ class SportsAnalyticsProcessor:
             return None
     
     def _to_detections(self, predictions):
-        """Convert Roboflow predictions to Supervision Detections - Matches Colab Cell 6"""
+        """Convert Roboflow predictions to Supervision Detections"""
         if not predictions or 'predictions' not in predictions:
             return sv.Detections.empty()
         
@@ -193,23 +169,18 @@ class SportsAnalyticsProcessor:
             confidence.append(p['confidence'])
         
         return sv.Detections(
-            xyxy=np.array(xyxy),
-            class_id=np.array(class_id),
-            confidence=np.array(confidence)
+            xyxy=np.array(xyxy, dtype=np.float32),
+            class_id=np.array(class_id, dtype=np.int32),
+            confidence=np.array(confidence, dtype=np.float32)
         )
     
-    # ============================================
-    # HOMOGRAPHY METHODS (cv2.findHomography)
-    # ============================================
-    
     def compute_homography(self, frame):
-        """Compute homography matrix from field keypoints using cv2.findHomography"""
+        """Compute homography matrix using cv2.findHomography"""
         try:
             preds = self._predict(self.field_model, frame, confidence=20)
             if not preds or len(preds.get('predictions', [])) < 4:
                 return None
             
-            # Extract camera-view keypoints
             cam_pts = []
             confs = []
             for p in preds['predictions']:
@@ -217,20 +188,15 @@ class SportsAnalyticsProcessor:
                 confs.append(p['confidence'])
             
             cam_pts = np.array(cam_pts, dtype=np.float32)
-            confs = np.array(confs)
+            confs = np.array(confs, dtype=np.float32)
             
-            # Filter high confidence points
             mask = confs > 0.4
-            cam_filtered = cam_pts[mask]
-            
-            # Get corresponding pitch points
-            all_pitch = np.array(self.config.vertices[:27], dtype=np.float32)
-            pitch_filtered = all_pitch[mask]
-            
-            if len(cam_filtered) < 4:
+            if mask.sum() < 4:
                 return None
             
-            # Compute homography with RANSAC
+            cam_filtered = cam_pts[mask]
+            pitch_filtered = np.array(self.config.vertices[:27], dtype=np.float32)[mask]
+            
             H, _ = cv2.findHomography(
                 srcPoints=cam_filtered,
                 dstPoints=pitch_filtered,
@@ -241,36 +207,36 @@ class SportsAnalyticsProcessor:
             if H is None:
                 return None
             
-            # Smooth over time
             self.homography_buffer.append(H)
             H_smooth = np.mean(np.array(self.homography_buffer), axis=0)
             H_smooth = H_smooth / H_smooth[2, 2]
             
-            return H_smooth
+            return H_smooth.astype(np.float32)
             
         except Exception:
             return None
     
     def transform_points(self, H, points):
-        """Apply homography matrix to transform points"""
+        """Apply homography to transform points"""
         if H is None or len(points) == 0:
             return np.array([])
         
-        ones = np.ones((len(points), 1))
+        ones = np.ones((len(points), 1), dtype=np.float32)
         homogeneous = np.hstack([points, ones])
         transformed = H @ homogeneous.T
         transformed = transformed / transformed[2, :]
         
         return transformed[:2, :].T
     
-    # ============================================
-    # TRAINING (Matches Colab Cell 6)
-    # ============================================
+    def reset(self):
+        """Reset tracker and state"""
+        self.tracker = sv.ByteTrack()
+        self.colors = JerseyColorExtractor()
+        self.homography_buffer.clear()
+        self.current_H = None
     
-    def train_team_classifier(self, video_path, num_frames=30):
-        """Train team classifier on video - Matches original Colab code"""
-        print("Learning team jersey colors...")
-        
+    def train_teams(self, video_path, num_frames=30):
+        """Train team classifier on video"""
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         stride = max(1, total_frames // num_frames)
@@ -301,196 +267,149 @@ class SportsAnalyticsProcessor:
         if len(crops) >= 10:
             self.team_classifier = TeamClassifier(device="cpu")
             self.team_classifier.fit(crops[:200])
-            print(f"Team classifier trained with {len(crops)} samples")
+            print(f"Trained with {len(crops)} samples")
             return True
         
-        print(f"Not enough training samples ({len(crops)})")
+        print(f"Only {len(crops)} samples")
         return False
     
-    # ============================================
-    # RESET
-    # ============================================
-    
-    def reset(self):
-        """Reset tracker and state"""
-        self.tracker = sv.ByteTrack()
-        self.jersey_extractor = JerseyColorExtractor()
-        self.homography_buffer.clear()
-        self.current_homography = None
-    
-    # ============================================
-    # FRAME PROCESSING (Matches Colab Cell 6)
-    # ============================================
-    
     def process_frame(self, frame, frame_count=0):
-        """Process a single frame and return annotated frame + bird's eye view"""
+        """Process single frame"""
         if self.tracker is None:
             self.reset()
         
-        # Default results
-        annotated = frame.copy()
-        birdseye = None
+        # Detect players
+        preds = self._predict(self.player_model, frame)
+        dets = self._to_detections(preds)
         
-        # Player detection
-        try:
-            preds = self._predict(self.player_model, frame)
-            detections = self._to_detections(preds)
-        except Exception:
-            return annotated, None
+        if len(dets) == 0:
+            return frame, None
         
-        if len(detections) == 0:
-            return annotated, None
+        # Split ball from players
+        ball = dets[dets.class_id == self.BALL_ID]
+        if len(ball) > 0:
+            ball.xyxy = sv.pad_boxes(ball.xyxy, px=10)
         
-        # Separate ball from players
-        ball_detections = detections[detections.class_id == self.BALL_ID]
-        if len(ball_detections) > 0:
-            ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
+        players = dets[dets.class_id != self.BALL_ID]
+        if len(players) == 0:
+            return frame, None
         
-        # Process non-ball detections
-        player_detections = detections[detections.class_id != self.BALL_ID]
-        if len(player_detections) == 0:
-            return annotated, None
+        # Track and classify
+        players = players.with_nms(threshold=0.5, class_agnostic=True)
+        players = self.tracker.update_with_detections(detections=players)
         
-        # NMS and tracking
-        player_detections = player_detections.with_nms(threshold=0.5, class_agnostic=True)
-        player_detections = self.tracker.update_with_detections(detections=player_detections)
+        if len(players) == 0:
+            return frame, None
         
-        if len(player_detections) == 0:
-            return annotated, None
-        
-        # Get tracker IDs
         tracker_ids = (
-            player_detections.tracker_id 
-            if hasattr(player_detections, 'tracker_id') 
-            else np.arange(len(player_detections))
+            players.tracker_id 
+            if hasattr(players, 'tracker_id') 
+            else np.arange(len(players))
         )
         
         # Team classification
         if self.team_classifier is not None:
             try:
-                pmask = player_detections.class_id == self.PLAYER_ID
+                pmask = players.class_id == self.PLAYER_ID
                 if pmask.sum() > 0:
-                    pcrops = [sv.crop_image(frame, b) for b in player_detections.xyxy[pmask]]
+                    pcrops = [sv.crop_image(frame, b) for b in players.xyxy[pmask]]
                     if pcrops:
-                        player_detections.class_id[pmask] = self.team_classifier.predict(pcrops)
+                        players.class_id[pmask] = self.team_classifier.predict(pcrops)
             except Exception:
                 pass
         
-        # Extract jersey colors
-        team_colors = self.jersey_extractor.get_team_colors_from_frame(
-            frame, player_detections, tracker_ids, player_detections.class_id
+        # Jersey colors
+        team_colors = self.colors.get_team_colors_from_frame(
+            frame, players, tracker_ids, players.class_id
         )
         
-        # Annotate frame with jersey colors
+        # Annotate frame
         annotated = self.viz.annotate_frame(
-            frame, player_detections, player_detections.class_id,
-            tracker_ids, team_colors, ball_detections
+            frame, players, players.class_id,
+            tracker_ids, team_colors, ball
         )
         
-        # Draw ball on annotated frame
-        for bbox in ball_detections.xyxy:
-            x1, y1, x2, y2 = bbox.astype(int)
-            center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-            cv2.drawMarker(annotated, center, (0, 255, 255), cv2.MARKER_STAR, 15, 2)
+        # Bird's eye view (every 3 frames)
+        birdseye = None
+        if frame_count % 3 == 0 or self.current_H is None:
+            self.current_H = self.compute_homography(frame)
         
-        # Bird's eye view using homography
-        # Compute homography every 3 frames for speed
-        if frame_count % 3 == 0 or self.current_homography is None:
-            self.current_homography = self.compute_homography(frame)
-        
-        if self.current_homography is not None:
+        if self.current_H is not None:
             try:
-                # Transform player positions
-                player_positions = player_detections.get_anchors_coordinates(
+                player_pos = players.get_anchors_coordinates(
                     sv.Position.BOTTOM_CENTER
                 )
-                pitch_positions = self.transform_points(
-                    self.current_homography, player_positions
-                )
+                pitch_pos = self.transform_points(self.current_H, player_pos)
                 
-                # Transform ball position
                 pitch_ball = None
-                if len(ball_detections) > 0:
-                    ball_pos = ball_detections.get_anchors_coordinates(
+                if len(ball) > 0:
+                    ball_pos = ball.get_anchors_coordinates(
                         sv.Position.BOTTOM_CENTER
                     )
-                    pitch_ball = self.transform_points(
-                        self.current_homography, ball_pos
-                    )
+                    pitch_ball = self.transform_points(self.current_H, ball_pos)
                 
                 birdseye = self.viz.create_birdseye(
-                    pitch_positions, player_detections.class_id,
-                    team_colors, pitch_ball
+                    pitch_pos, players.class_id, team_colors, pitch_ball
                 )
             except Exception:
                 birdseye = None
         
         return annotated, birdseye
     
-    # ============================================
-    # VIDEO PROCESSING
-    # ============================================
-    
     def process_video(self, video_path, progress_callback=None):
-        """Process entire video file and return output paths"""
+        """Process entire video file"""
         self.reset()
-        
-        # Train team classifier
-        self.train_team_classifier(video_path, num_frames=30)
+        self.train_teams(video_path, num_frames=30)
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            raise ValueError("Cannot open video file")
+            raise ValueError("Cannot open video")
         
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Create output files
-        out_annotated = tempfile.NamedTemporaryFile(suffix='_tracked.mp4', delete=False)
-        out_birdseye = tempfile.NamedTemporaryFile(suffix='_birdseye.mp4', delete=False)
+        # Get pitch dimensions once
+        pitch_w, pitch_h = self.viz.get_pitch_size()
+        
+        out_a = tempfile.NamedTemporaryFile(suffix='_tracked.mp4', delete=False)
+        out_b = tempfile.NamedTemporaryFile(suffix='_birdseye.mp4', delete=False)
         
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writer_a = cv2.VideoWriter(out_annotated.name, fourcc, fps, (width, height))
-        writer_b = cv2.VideoWriter(
-            out_birdseye.name, fourcc, fps,
-            (int(self.config.length * 0.1), int(self.config.width * 0.1))
-        )
+        wa = cv2.VideoWriter(out_a.name, fourcc, fps, (width, height))
+        wb = cv2.VideoWriter(out_b.name, fourcc, fps, (pitch_w, pitch_h))
         
-        blank_pitch = self.viz.create_blank_pitch()
-        frame_count = 0
+        blank = self.viz.create_blank_pitch()
+        fc = 0
         
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # Process frame
-            annotated, birdseye = self.process_frame(frame, frame_count)
+            annotated, birdseye = self.process_frame(frame, fc)
             
             # Write annotated frame
-            if annotated is not None and annotated.size > 0:
-                writer_a.write(annotated)
-            else:
-                writer_a.write(frame)
+            if annotated.shape[0] != height or annotated.shape[1] != width:
+                annotated = cv2.resize(annotated, (width, height))
+            wa.write(annotated)
             
             # Write bird's eye view
-            if birdseye is not None and birdseye.size > 0:
-                writer_b.write(birdseye)
+            if birdseye is not None:
+                if birdseye.shape[0] != pitch_h or birdseye.shape[1] != pitch_w:
+                    birdseye = cv2.resize(birdseye, (pitch_w, pitch_h))
+                wb.write(birdseye)
             else:
-                writer_b.write(blank_pitch)
+                wb.write(blank)
             
-            frame_count += 1
+            fc += 1
             
-            # Update progress
-            if progress_callback and frame_count % 5 == 0:
-                progress_callback(frame_count / total_frames)
+            if progress_callback and fc % 5 == 0:
+                progress_callback(fc / total_frames)
         
         cap.release()
-        writer_a.release()
-        writer_b.release()
+        wa.release()
+        wb.release()
         
-        print(f"Processed {frame_count} frames")
-        
-        return out_annotated.name, out_birdseye.name, frame_count
+        return out_a.name, out_b.name, fc
