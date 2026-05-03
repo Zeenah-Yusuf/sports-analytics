@@ -20,16 +20,18 @@ class PitchVisualizer:
                 detections.xyxy, team_ids, tracker_ids
             ):
                 x1, y1, x2, y2 = bbox.astype(int)
-                color = team_colors.get(int(team_id), (128, 128, 128))
+                
+                # Get color and ENSURE it's plain Python ints
+                raw_color = team_colors.get(int(team_id), (128, 128, 128))
+                color = (int(raw_color[0]), int(raw_color[1]), int(raw_color[2]))
                 
                 # Ellipse under player
                 center = (int((x1 + x2) / 2), int(y2))
                 axes = (int((x2 - x1) / 2), int((y2 - y1) / 4))
                 
-                cv2.ellipse(annotated, center, axes, 0, 0, 360, 
-                          color, -1, cv2.LINE_AA)
-                cv2.ellipse(annotated, center, axes, 0, 0, 360, 
-                          (0, 0, 0), 2, cv2.LINE_AA)
+                # FIXED: Use separate calls instead of overloaded syntax
+                cv2.ellipse(annotated, center, axes, 0, 0, 360, color, -1, cv2.LINE_AA)
+                cv2.ellipse(annotated, center, axes, 0, 0, 360, (0, 0, 0), 2, cv2.LINE_AA)
                 
                 # ID label
                 text = f"#{tracker_id}"
@@ -62,7 +64,8 @@ class PitchVisualizer:
         
         if len(player_positions) > 0:
             for pos, team_id in zip(player_positions, team_ids):
-                color_bgr = team_colors.get(int(team_id), (128, 128, 128))
+                raw_color = team_colors.get(int(team_id), (128, 128, 128))
+                color_bgr = (int(raw_color[0]), int(raw_color[1]), int(raw_color[2]))
                 sv_color = sv.Color(
                     r=color_bgr[2], g=color_bgr[1], b=color_bgr[0]
                 )
