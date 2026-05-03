@@ -157,7 +157,7 @@ class SportsAnalyticsProcessor:
             .version(14).model
         )
         self.models_loaded = True
-        print("✅ Models loaded!")
+        print("Models loaded!")
     
     # ============================================
     # ROBLOFLOW API METHODS
@@ -269,7 +269,7 @@ class SportsAnalyticsProcessor:
     
     def train_team_classifier(self, video_path, num_frames=30):
         """Train team classifier on video - Matches original Colab code"""
-        print("🎨 Learning team jersey colors...")
+        print("Learning team jersey colors...")
         
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -301,10 +301,10 @@ class SportsAnalyticsProcessor:
         if len(crops) >= 10:
             self.team_classifier = TeamClassifier(device="cpu")
             self.team_classifier.fit(crops[:200])
-            print(f"✅ Team classifier trained with {len(crops)} samples")
+            print(f"Team classifier trained with {len(crops)} samples")
             return True
         
-        print(f"⚠️ Not enough training samples ({len(crops)})")
+        print(f"Not enough training samples ({len(crops)})")
         return False
     
     # ============================================
@@ -491,6 +491,6 @@ class SportsAnalyticsProcessor:
         writer_a.release()
         writer_b.release()
         
-        print(f"✅ Processed {frame_count} frames")
+        print(f"Processed {frame_count} frames")
         
         return out_annotated.name, out_birdseye.name, frame_count
